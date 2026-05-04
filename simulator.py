@@ -8,17 +8,18 @@ import os
 import json
 import sys
 import ctypes
+import urllib.request
+import threading
+import subprocess
+
+TESSERACT_INSTALL_DIR = os.path.join(os.path.expanduser("~"), ".text_type_simulator", "tesseract_bin")
+TESSERACT_EXE_PATH = os.path.join(TESSERACT_INSTALL_DIR, "tesseract.exe")
 
 # Set the tesseract executable path dynamically based on OS
 if sys.platform == "win32":
-    if hasattr(sys, '_MEIPASS'):
-        tess_path = os.path.join(sys._MEIPASS, "tesseract_bin", "tesseract.exe")
-    else:
-        tess_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tesseract_bin", "tesseract.exe")
-        
-    if os.path.exists(tess_path):
-        pytesseract.pytesseract.tesseract_cmd = tess_path
-        os.environ["TESSDATA_PREFIX"] = os.path.join(os.path.dirname(tess_path), "tessdata")
+    if os.path.exists(TESSERACT_EXE_PATH):
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
+        os.environ["TESSDATA_PREFIX"] = os.path.join(TESSERACT_INSTALL_DIR, "tessdata")
     else:
         pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 elif sys.platform == "darwin":
