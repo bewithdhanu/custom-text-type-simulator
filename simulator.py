@@ -40,11 +40,11 @@ def activate_window(window_keyword):
     except Exception:
         pass # getActiveWindow can sometimes fail if no window is active
         
-    print(f"Looking for a window containing '{window_title_keyword}'...")
-    matching_windows = [w for w in gw.getAllWindows() if window_title_keyword.lower() in w.title.lower() and w.visible]
+    print(f"Looking for a window containing '{window_keyword}'...")
+    matching_windows = [w for w in gw.getAllWindows() if window_keyword.lower() in w.title.lower() and w.visible]
     
     if not matching_windows:
-        print(f"Could not find any open windows containing '{window_title_keyword}'!")
+        print(f"Could not find any open windows containing '{window_keyword}'!")
         return False
         
     target_window = matching_windows[0]
@@ -289,23 +289,23 @@ def find_text_and_interact(parent, target_text, text_to_type):
         
         # 4. Perform a type operation
         if not ui_countdown_with_interrupt(parent, TIMER, f"type '{text_to_type}'", target_x, target_y, target_w, target_h):
-            return False
+            return False, "User manually interrupted before typing"
             
         print(f"Performing type operation: '{text_to_type}'")
         pyautogui.write(text_to_type, interval=0.05)
         
         # 5. Perform an enter operation
         if not ui_countdown_with_interrupt(parent, TIMER, "press Enter", target_x, target_y, target_w, target_h):
-            return False
+            return False, "User manually interrupted before pressing Enter"
             
         print("Performing enter operation...")
         pyautogui.press('enter')
         
         print("Operation completed successfully!")
-        return True
+        return True, ""
     else:
         print(f"Could not find the text '{target_text}' on the screen.")
-        return False
+        return False, f"Could not find text '{target_text}' via OCR"
 
 class SimulatorApp(ctk.CTk):
     def __init__(self):
@@ -344,27 +344,27 @@ class SimulatorApp(ctk.CTk):
         
         # Input: Target Window Name
         ctk.CTkLabel(frame, text="Target Window Name:", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_window = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_window = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_window.insert(0, "Zoom")
-        self.entry_window.pack(pady=(0, 15), padx=20)
+        self.entry_window.pack(fill="x", pady=(0, 15), padx=20)
         
         # Input: Search Text
         ctk.CTkLabel(frame, text="Search Text:", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_search = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_search = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_search.insert(0, "Write a message to Webex space for Mohana")
-        self.entry_search.pack(pady=(0, 15), padx=20)
+        self.entry_search.pack(fill="x", pady=(0, 15), padx=20)
         
         # Input: Text to Type
         ctk.CTkLabel(frame, text="Text to Type:", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_type = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_type = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_type.insert(0, "Check")
-        self.entry_type.pack(pady=(0, 15), padx=20)
+        self.entry_type.pack(fill="x", pady=(0, 15), padx=20)
         
         # Input: Interval
         ctk.CTkLabel(frame, text="Run every X minutes (0 for single run):", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_interval = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_interval = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_interval.insert(0, "15")
-        self.entry_interval.pack(pady=(0, 25), padx=20)
+        self.entry_interval.pack(fill="x", pady=(0, 25), padx=20)
         
         # Buttons Frame
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -381,7 +381,7 @@ class SimulatorApp(ctk.CTk):
         self.btn_stop.pack(side="left", padx=10)
         
         # Status Label
-        self.lbl_status = ctk.CTkLabel(frame, text="", text_color="#007bff", font=ctk.CTkFont(size=14, weight="bold"))
+        self.lbl_status = ctk.CTkLabel(frame, text="", text_color="#007bff", font=ctk.CTkFont(size=14, weight="bold"), wraplength=600)
         self.lbl_status.pack(pady=5)
         
         # Image Label
@@ -447,12 +447,13 @@ class SimulatorApp(ctk.CTk):
             
         self.run_process()
 
-    def stop_process(self):
+    def stop_process(self, message="Autopilot stopped."):
         self.is_recurring = False
         if self.recurring_timer_id:
             self.after_cancel(self.recurring_timer_id)
             self.recurring_timer_id = None
-        self.lbl_status.configure(text="Autopilot stopped.")
+        if message:
+            self.lbl_status.configure(text=message)
         self.btn_stop.configure(state="disabled")
 
     def run_process(self):
@@ -468,15 +469,17 @@ class SimulatorApp(ctk.CTk):
         
     def _execute(self, window_name, search_text, type_text):
         success = False
+        reason = ""
         try:
             if not activate_window(window_name):
-                self.lbl_status.configure(text=f"Error: Could not find window '{window_name}'")
+                reason = f"Could not find window '{window_name}'"
+                self.lbl_status.configure(text=f"Error: {reason}")
             else:
-                success = find_text_and_interact(self, search_text, type_text)
+                success, reason = find_text_and_interact(self, search_text, type_text)
                 if success:
                     self.lbl_status.configure(text="Operation completed successfully!")
                 else:
-                    self.lbl_status.configure(text="Operation failed or was interrupted.")
+                    self.lbl_status.configure(text=f"Operation failed: {reason}")
                     
             # Load and display screenshot if it exists
             if os.path.exists('screenshot.png'):
@@ -486,14 +489,15 @@ class SimulatorApp(ctk.CTk):
                 self.lbl_image.configure(image=ctk_img, text="")
                 
         except Exception as e:
-            self.lbl_status.configure(text=f"Error: {e}")
+            reason = str(e)
+            self.lbl_status.configure(text=f"Error: {reason}")
             
         self.deiconify() # Show main window again
         
         # Stop recurring if the user manually interrupted the process or it failed
         if not success and self.is_recurring:
-            self.lbl_status.configure(text=self.lbl_status.cget("text") + " | Autopilot stopped.")
-            self.stop_process()
+            new_msg = self.lbl_status.cget("text") + f" | Autopilot stopped ({reason})"
+            self.stop_process(message=new_msg)
             return
             
         if self.is_recurring:
