@@ -438,10 +438,20 @@ class SimulatorApp(ctk.CTk):
         self.load_config()
         
         # Check if Tesseract needs downloading
-        if sys.platform == "win32" and not os.path.exists(TESSERACT_EXE_PATH):
+        needs_download = False
+        if sys.platform == "win32":
+            try:
+                # Try to get tesseract version. If it succeeds, it's installed and accessible!
+                pytesseract.get_tesseract_version()
+            except Exception:
+                needs_download = True
+                
+        if needs_download:
             self.btn_run.configure(state="disabled")
             self.progress_frame.pack(pady=10)
             threading.Thread(target=self._download_tesseract, daemon=True).start()
+        else:
+            self.progress_frame.pack_forget()
 
     def _download_tesseract(self):
         try:
@@ -466,8 +476,11 @@ class SimulatorApp(ctk.CTk):
             subprocess.run(["powershell", "-Command", ps_command], check=True, creationflags=0x08000000)
             
             # Setup env
-            pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
-            os.environ["TESSDATA_PREFIX"] = os.path.join(TESSERACT_INSTALL_DIR, "tessdata")
+            if os.path.exists(TESSERACT_EXE_PATH):
+                pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
+                os.environ["TESSDATA_PREFIX"] = os.path.join(TESSERACT_INSTALL_DIR, "tessdata")
+            else:
+                pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
             
             # Clean up
             if os.path.exists(installer_path):
