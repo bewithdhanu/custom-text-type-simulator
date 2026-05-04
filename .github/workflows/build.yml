@@ -1,0 +1,95 @@
+name: Build Executables Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows x64
+          - os: Windows
+            arch: x64
+            runner: windows-latest
+            artifact_name: simulator-windows-x64.exe
+          
+          # Windows x86 (Using 32-bit Python on Windows runner)
+          - os: Windows
+            arch: x86
+            runner: windows-latest
+            artifact_name: simulator-windows-x86.exe
+            
+          # Mac Intel
+          - os: macOS
+            arch: Intel
+            runner: macos-13
+            artifact_name: simulator-mac-intel
+            
+          # Mac Apple Silicon (M-Series)
+          - os: macOS
+            arch: ARM64
+            runner: macos-14
+            artifact_name: simulator-mac-arm64
+            
+          # Linux Ubuntu x64
+          - os: Linux
+            arch: x64
+            runner: ubuntu-latest
+            artifact_name: simulator-linux-x64
+            
+          # Linux Ubuntu ARM64 (Requires GitHub arm64 runner or QEMU)
+          # Note: If your repo doesn't have access to ubuntu-24.04-arm, you may need to use docker/QEMU setup.
+          - os: Linux
+            arch: ARM64
+            runner: ubuntu-24.04-arm
+            artifact_name: simulator-linux-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Setup Python (Uses x86 explicitly for Windows x86 build)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.arch == 'x86' && 'x86' || 'x64' }}
+
+      # Install OS-specific dependencies for Linux (PyAutoGUI requirements)
+      - name: Install Linux Dependencies
+        if: matrix.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk python3-dev scrot x11-utils tesseract-ocr libx11-dev
+          
+      # Install OS-specific dependencies for Mac (Tesseract)
+      - name: Install Mac Dependencies
+        if: matrix.os == 'macOS'
+        run: |
+          brew install tesseract
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller customtkinter pyautogui pytesseract pygetwindow pillow opencv-python numpy
+
+      - name: Build with PyInstaller (Windows)
+        if: matrix.os == 'Windows'
+        run: |
+          pyinstaller --onefile --icon=icon.ico --add-data "icon.ico;." --name ${{ matrix.artifact_name }} simulator.py
+
+      - name: Build with PyInstaller (Mac/Linux)
+        if: matrix.os != 'Windows'
+        run: |
+          pyinstaller --onefile --icon=icon.ico --add-data "icon.ico:." --name ${{ matrix.artifact_name }} simulator.py
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}
