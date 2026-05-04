@@ -418,6 +418,14 @@ class SimulatorApp(ctk.CTk):
         self.lbl_status = ctk.CTkLabel(frame, text="", text_color="#007bff", font=ctk.CTkFont(size=14, weight="bold"), wraplength=600)
         self.lbl_status.pack(pady=5)
         
+        # Download Progress Bar
+        self.progress_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        self.lbl_download = ctk.CTkLabel(self.progress_frame, text="Downloading Tesseract OCR engine...", text_color="#ffcc00", font=ctk.CTkFont(size=12))
+        self.lbl_download.pack()
+        self.progressbar = ctk.CTkProgressBar(self.progress_frame, width=400)
+        self.progressbar.set(0)
+        self.progressbar.pack(pady=(5, 0))
+        
         # Image Label
         self.lbl_image = ctk.CTkLabel(frame, text="")
         self.lbl_image.pack(pady=10, fill="both", expand=True)
@@ -427,6 +435,51 @@ class SimulatorApp(ctk.CTk):
         
         self.config_path = os.path.join(os.path.expanduser("~"), ".text_type_simulator_config.json")
         self.load_config()
+        
+        # Check if Tesseract needs downloading
+        if sys.platform == "win32" and not os.path.exists(TESSERACT_EXE_PATH):
+            self.btn_run.configure(state="disabled")
+            self.progress_frame.pack(pady=10)
+            threading.Thread(target=self._download_tesseract, daemon=True).start()
+
+    def _download_tesseract(self):
+        try:
+            url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20231005/tesseract-ocr-w64-setup-5.3.3.20231005.exe"
+            installer_path = os.path.join(os.path.expanduser("~"), ".text_type_simulator", "tesseract-setup.exe")
+            os.makedirs(os.path.dirname(installer_path), exist_ok=True)
+            
+            def report_hook(count, block_size, total_size):
+                if total_size > 0:
+                    progress = (count * block_size) / total_size
+                    self.after(0, lambda: self.progressbar.set(min(1.0, progress)))
+            
+            urllib.request.urlretrieve(url, installer_path, reporthook=report_hook)
+            
+            self.after(0, lambda: self.lbl_download.configure(text="Extracting Tesseract... (This may take a minute)", text_color="#17a2b8"))
+            self.after(0, lambda: self.progressbar.configure(mode="indeterminate"))
+            self.after(0, self.progressbar.start)
+            
+            # Run silent install
+            subprocess.run([installer_path, "/S", f"/D={TESSERACT_INSTALL_DIR}"], check=True)
+            
+            # Setup env
+            pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
+            os.environ["TESSDATA_PREFIX"] = os.path.join(TESSERACT_INSTALL_DIR, "tessdata")
+            
+            # Clean up
+            if os.path.exists(installer_path):
+                os.remove(installer_path)
+                
+            self.after(0, self._on_download_complete)
+        except Exception as e:
+            self.after(0, lambda: self.lbl_download.configure(text=f"Failed to download OCR: {e}", text_color="#dc3545"))
+            self.after(0, self.progressbar.stop)
+
+    def _on_download_complete(self):
+        self.progressbar.stop()
+        self.progress_frame.pack_forget()
+        self.btn_run.configure(state="normal")
+        self.lbl_status.configure(text="Tesseract OCR successfully installed!", text_color="#28a745")
 
     def load_config(self):
         if os.path.exists(self.config_path):
