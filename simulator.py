@@ -445,7 +445,7 @@ class SimulatorApp(ctk.CTk):
 
     def _download_tesseract(self):
         try:
-            url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20231005/tesseract-ocr-w64-setup-5.3.3.20231005.exe"
+            url = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
             installer_path = os.path.join(os.path.expanduser("~"), ".text_type_simulator", "tesseract-setup.exe")
             os.makedirs(os.path.dirname(installer_path), exist_ok=True)
             
