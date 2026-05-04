@@ -12,6 +12,16 @@ import urllib.request
 import threading
 import subprocess
 
+# Enable DPI awareness on Windows so pygetwindow returns physical coordinates
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 TESSERACT_INSTALL_DIR = os.path.join(os.path.expanduser("~"), ".text_type_simulator", "tesseract_bin")
 TESSERACT_EXE_PATH = os.path.join(TESSERACT_INSTALL_DIR, "tesseract.exe")
 
@@ -183,22 +193,24 @@ def find_text_and_interact(parent, target_text, text_to_type, region=None):
     # Handle regions that might be out of bounds (e.g., negative coordinates)
     if region is not None:
         x, y, w, h = region
-        screen_w, screen_h = pyautogui.size()
-        x = max(0, min(x, screen_w - 1))
-        y = max(0, min(y, screen_h - 1))
-        w = min(w, screen_w - x)
-        h = min(h, screen_h - y)
-        if w > 0 and h > 0:
-            region = (x, y, w, h)
-        else:
+        if w <= 0 or h <= 0:
             region = None
 
     if region:
-        screenshot = pyautogui.screenshot(region=region)
-        region_offset_x = region[0]
-        region_offset_y = region[1]
+        x, y, w, h = region
+        if sys.platform == "win32":
+            from PIL import ImageGrab
+            screenshot = ImageGrab.grab(bbox=(x, y, x+w, y+h), all_screens=True)
+        else:
+            screenshot = pyautogui.screenshot(region=region)
+        region_offset_x = x
+        region_offset_y = y
     else:
-        screenshot = pyautogui.screenshot()
+        if sys.platform == "win32":
+            from PIL import ImageGrab
+            screenshot = ImageGrab.grab(all_screens=True)
+        else:
+            screenshot = pyautogui.screenshot()
         region_offset_x = 0
         region_offset_y = 0
         
@@ -588,7 +600,7 @@ class SimulatorApp(ctk.CTk):
             # Load and display screenshot if it exists
             if os.path.exists('screenshot.png'):
                 img = Image.open('screenshot.png')
-                img.thumbnail((600, 450)) # Resize to fit the UI
+                img.thumbnail((500, 250)) # Resize to fit the UI without pushing window off-screen
                 ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
                 self.lbl_image.configure(image=ctk_img, text="")
                 
