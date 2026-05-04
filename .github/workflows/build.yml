@@ -84,10 +84,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter pyautogui pytesseract pygetwindow pillow opencv-python numpy
 
+      - name: Bundle Portable Tesseract (Windows)
+        if: matrix.os == 'Windows'
+        shell: pwsh
+        run: |
+          $TessUrl = if ('${{ matrix.arch }}' -eq 'x86') { "https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20231005/tesseract-ocr-w32-setup-5.3.3.20231005.exe" } else { "https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20231005/tesseract-ocr-w64-setup-5.3.3.20231005.exe" }
+          Invoke-WebRequest -Uri $TessUrl -OutFile "tesseract-setup.exe"
+          Start-Process -FilePath ".\tesseract-setup.exe" -ArgumentList "/S", "/D=$PWD\tesseract_bin" -Wait
+
       - name: Build with PyInstaller (Windows)
         if: matrix.os == 'Windows'
         run: |
-          pyinstaller --onefile --icon=icon.ico --add-data "icon.ico;." --name ${{ matrix.artifact_name }} simulator.py
+          pyinstaller --onefile --icon=icon.ico --add-data "icon.ico;." --add-data "tesseract_bin;tesseract_bin" --name ${{ matrix.artifact_name }} simulator.py
 
       - name: Build with PyInstaller (Mac/Linux)
         if: matrix.os != 'Windows'

@@ -11,7 +11,16 @@ import ctypes
 
 # Set the tesseract executable path dynamically based on OS
 if sys.platform == "win32":
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    if hasattr(sys, '_MEIPASS'):
+        tess_path = os.path.join(sys._MEIPASS, "tesseract_bin", "tesseract.exe")
+    else:
+        tess_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tesseract_bin", "tesseract.exe")
+        
+    if os.path.exists(tess_path):
+        pytesseract.pytesseract.tesseract_cmd = tess_path
+        os.environ["TESSDATA_PREFIX"] = os.path.join(os.path.dirname(tess_path), "tessdata")
+    else:
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 elif sys.platform == "darwin":
     pytesseract.pytesseract.tesseract_cmd = r'/usr/local/bin/tesseract' # Typical Mac Homebrew path
 else:
@@ -25,10 +34,11 @@ import time
 def activate_window(window_keyword):
     """
     Finds a window by keyword and brings it to the foreground.
+    Returns a tuple: (window_found: bool, region: tuple or None)
     """
     if sys.platform != "win32":
         print(f"Warning: Window activation via pygetwindow is currently only fully supported on Windows. Assuming '{window_keyword}' is already focused.")
-        return True
+        return True, None
         
     try:
         # Find all windows containing the keyword (case-insensitive)
@@ -36,7 +46,7 @@ def activate_window(window_keyword):
         active_window = gw.getActiveWindow()
         if active_window and window_keyword.lower() in active_window.title.lower():
             print(f"'{window_keyword}' is already the active window: '{active_window.title}'")
-            return True
+            return True, (active_window.left, active_window.top, active_window.width, active_window.height)
     except Exception:
         pass # getActiveWindow can sometimes fail if no window is active
         
@@ -45,7 +55,7 @@ def activate_window(window_keyword):
     
     if not matching_windows:
         print(f"Could not find any open windows containing '{window_keyword}'!")
-        return False
+        return False, None
         
     target_window = matching_windows[0]
     print(f"Activating window: '{target_window.title}'")
@@ -54,10 +64,10 @@ def activate_window(window_keyword):
             target_window.restore()
         target_window.activate()
         time.sleep(1.5) # Wait a moment for it to come to the foreground
-        return True
+        return True, (target_window.left, target_window.top, target_window.width, target_window.height)
     except Exception as e:
         print(f"Failed to activate window: {e}")
-        return False
+        return True, None # We assume it might still be visible
 
 def ui_countdown_with_interrupt(parent, seconds, action_name, target_x=None, target_y=None, target_w=None, target_h=None):
     """
@@ -162,23 +172,47 @@ def ui_countdown_with_interrupt(parent, seconds, action_name, target_x=None, tar
     
     return result["completed"]
 
-def find_text_and_interact(parent, target_text, text_to_type):
+def find_text_and_interact(parent, target_text, text_to_type, region=None):
     """
     Finds specific text on the screen, clicks it, types text, and presses Enter.
     """
     # 1. Take a screenshot
     print("Taking a screenshot...")
-    screenshot = pyautogui.screenshot()
     
+    # Handle regions that might be out of bounds (e.g., negative coordinates)
+    if region is not None:
+        x, y, w, h = region
+        screen_w, screen_h = pyautogui.size()
+        x = max(0, min(x, screen_w - 1))
+        y = max(0, min(y, screen_h - 1))
+        w = min(w, screen_w - x)
+        h = min(h, screen_h - y)
+        if w > 0 and h > 0:
+            region = (x, y, w, h)
+        else:
+            region = None
+
+    if region:
+        screenshot = pyautogui.screenshot(region=region)
+        region_offset_x = region[0]
+        region_offset_y = region[1]
+    else:
+        screenshot = pyautogui.screenshot()
+        region_offset_x = 0
+        region_offset_y = 0
+        
     # Save the screenshot for debugging/viewing
     screenshot.save('screenshot.png')
     print("Screenshot saved to 'screenshot.png'")
     
     # Calculate scale factor (crucial for Retina displays on Mac)
-    # screenshot.size is in pixels, pyautogui.size() is in points
-    screen_width, screen_height = pyautogui.size()
-    scale_x = screenshot.width / screen_width
-    scale_y = screenshot.height / screen_height
+    if region:
+        scale_x = screenshot.width / region[2]
+        scale_y = screenshot.height / region[3]
+    else:
+        screen_width, screen_height = pyautogui.size()
+        scale_x = screenshot.width / screen_width
+        scale_y = screenshot.height / screen_height
     
     # Convert screenshot to OpenCV format (numpy array)
     img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
@@ -267,8 +301,8 @@ def find_text_and_interact(parent, target_text, text_to_type):
             pixel_y = y + (h / 2)
             
             # Convert image pixels to screen points for pyautogui
-            target_x = pixel_x / scale_x
-            target_y = pixel_y / scale_y
+            target_x = (pixel_x / scale_x) + region_offset_x
+            target_y = (pixel_y / scale_y) + region_offset_y
             
             # Use the precise width of the matched text
             target_w = w / scale_x
@@ -471,11 +505,12 @@ class SimulatorApp(ctk.CTk):
         success = False
         reason = ""
         try:
-            if not activate_window(window_name):
+            window_found, region = activate_window(window_name)
+            if not window_found:
                 reason = f"Could not find window '{window_name}'"
                 self.lbl_status.configure(text=f"Error: {reason}")
             else:
-                success, reason = find_text_and_interact(self, search_text, type_text)
+                success, reason = find_text_and_interact(self, search_text, type_text, region)
                 if success:
                     self.lbl_status.configure(text="Operation completed successfully!")
                 else:
