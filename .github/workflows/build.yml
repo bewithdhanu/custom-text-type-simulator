@@ -16,30 +16,35 @@ jobs:
           # Windows x64
           - os: Windows
             arch: x64
+            python_arch: x64
             runner: windows-latest
             artifact_name: simulator-windows-x64.exe
           
           # Windows x86 (Using 32-bit Python on Windows runner)
           - os: Windows
             arch: x86
+            python_arch: x86
             runner: windows-latest
             artifact_name: simulator-windows-x86.exe
             
           # Mac Intel
           - os: macOS
             arch: Intel
+            python_arch: x64
             runner: macos-13
             artifact_name: simulator-mac-intel
             
           # Mac Apple Silicon (M-Series)
           - os: macOS
             arch: ARM64
+            python_arch: arm64
             runner: macos-14
             artifact_name: simulator-mac-arm64
             
           # Linux Ubuntu x64
           - os: Linux
             arch: x64
+            python_arch: x64
             runner: ubuntu-latest
             artifact_name: simulator-linux-x64
             
@@ -47,18 +52,19 @@ jobs:
           # Note: If your repo doesn't have access to ubuntu-24.04-arm, you may need to use docker/QEMU setup.
           - os: Linux
             arch: ARM64
+            python_arch: aarch64
             runner: ubuntu-24.04-arm
             artifact_name: simulator-linux-arm64
 
     steps:
       - uses: actions/checkout@v4
 
-      # Setup Python (Uses x86 explicitly for Windows x86 build)
+      # Setup Python (Uses explicit architecture)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          architecture: ${{ matrix.arch == 'x86' && 'x86' || 'x64' }}
+          architecture: ${{ matrix.python_arch }}
 
       # Install OS-specific dependencies for Linux (PyAutoGUI requirements)
       - name: Install Linux Dependencies
