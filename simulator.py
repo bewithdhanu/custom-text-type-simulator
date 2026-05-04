@@ -460,8 +460,10 @@ class SimulatorApp(ctk.CTk):
             self.after(0, lambda: self.progressbar.configure(mode="indeterminate"))
             self.after(0, self.progressbar.start)
             
-            # Run silent install
-            subprocess.run([installer_path, "/S", f"/D={TESSERACT_INSTALL_DIR}"], check=True)
+            # Run silent install with elevation (UAC prompt will appear)
+            self.after(0, lambda: self.lbl_download.configure(text="Please accept the Windows Admin prompt to install OCR..."))
+            ps_command = f"Start-Process -FilePath '{installer_path}' -ArgumentList '/S', '/D={TESSERACT_INSTALL_DIR}' -Verb RunAs -Wait"
+            subprocess.run(["powershell", "-Command", ps_command], check=True, creationflags=0x08000000)
             
             # Setup env
             pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
