@@ -8,10 +8,30 @@ import os
 import json
 import sys
 import ctypes
+import urllib.request
+import threading
+import subprocess
+
+# Enable DPI awareness on Windows so pygetwindow returns physical coordinates
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+TESSERACT_INSTALL_DIR = os.path.join(os.path.expanduser("~"), ".text_type_simulator", "tesseract_bin")
+TESSERACT_EXE_PATH = os.path.join(TESSERACT_INSTALL_DIR, "tesseract.exe")
 
 # Set the tesseract executable path dynamically based on OS
 if sys.platform == "win32":
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    if os.path.exists(TESSERACT_EXE_PATH):
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
+        os.environ["TESSDATA_PREFIX"] = os.path.join(TESSERACT_INSTALL_DIR, "tessdata")
+    else:
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 elif sys.platform == "darwin":
     pytesseract.pytesseract.tesseract_cmd = r'/usr/local/bin/tesseract' # Typical Mac Homebrew path
 else:
@@ -25,10 +45,11 @@ import time
 def activate_window(window_keyword):
     """
     Finds a window by keyword and brings it to the foreground.
+    Returns a tuple: (window_found: bool, region: tuple or None)
     """
     if sys.platform != "win32":
         print(f"Warning: Window activation via pygetwindow is currently only fully supported on Windows. Assuming '{window_keyword}' is already focused.")
-        return True
+        return True, None
         
     try:
         # Find all windows containing the keyword (case-insensitive)
@@ -36,16 +57,16 @@ def activate_window(window_keyword):
         active_window = gw.getActiveWindow()
         if active_window and window_keyword.lower() in active_window.title.lower():
             print(f"'{window_keyword}' is already the active window: '{active_window.title}'")
-            return True
+            return True, (active_window.left, active_window.top, active_window.width, active_window.height)
     except Exception:
         pass # getActiveWindow can sometimes fail if no window is active
         
-    print(f"Looking for a window containing '{window_title_keyword}'...")
-    matching_windows = [w for w in gw.getAllWindows() if window_title_keyword.lower() in w.title.lower() and w.visible]
+    print(f"Looking for a window containing '{window_keyword}'...")
+    matching_windows = [w for w in gw.getAllWindows() if window_keyword.lower() in w.title.lower() and w.visible]
     
     if not matching_windows:
-        print(f"Could not find any open windows containing '{window_title_keyword}'!")
-        return False
+        print(f"Could not find any open windows containing '{window_keyword}'!")
+        return False, None
         
     target_window = matching_windows[0]
     print(f"Activating window: '{target_window.title}'")
@@ -54,10 +75,10 @@ def activate_window(window_keyword):
             target_window.restore()
         target_window.activate()
         time.sleep(1.5) # Wait a moment for it to come to the foreground
-        return True
+        return True, (target_window.left, target_window.top, target_window.width, target_window.height)
     except Exception as e:
         print(f"Failed to activate window: {e}")
-        return False
+        return True, None # We assume it might still be visible
 
 def ui_countdown_with_interrupt(parent, seconds, action_name, target_x=None, target_y=None, target_w=None, target_h=None):
     """
@@ -162,23 +183,49 @@ def ui_countdown_with_interrupt(parent, seconds, action_name, target_x=None, tar
     
     return result["completed"]
 
-def find_text_and_interact(parent, target_text, text_to_type):
+def find_text_and_interact(parent, target_text, text_to_type, region=None):
     """
     Finds specific text on the screen, clicks it, types text, and presses Enter.
     """
     # 1. Take a screenshot
     print("Taking a screenshot...")
-    screenshot = pyautogui.screenshot()
     
+    # Handle regions that might be out of bounds (e.g., negative coordinates)
+    if region is not None:
+        x, y, w, h = region
+        if w <= 0 or h <= 0:
+            region = None
+
+    if region:
+        x, y, w, h = region
+        if sys.platform == "win32":
+            from PIL import ImageGrab
+            screenshot = ImageGrab.grab(bbox=(x, y, x+w, y+h), all_screens=True)
+        else:
+            screenshot = pyautogui.screenshot(region=region)
+        region_offset_x = x
+        region_offset_y = y
+    else:
+        if sys.platform == "win32":
+            from PIL import ImageGrab
+            screenshot = ImageGrab.grab(all_screens=True)
+        else:
+            screenshot = pyautogui.screenshot()
+        region_offset_x = 0
+        region_offset_y = 0
+        
     # Save the screenshot for debugging/viewing
     screenshot.save('screenshot.png')
     print("Screenshot saved to 'screenshot.png'")
     
     # Calculate scale factor (crucial for Retina displays on Mac)
-    # screenshot.size is in pixels, pyautogui.size() is in points
-    screen_width, screen_height = pyautogui.size()
-    scale_x = screenshot.width / screen_width
-    scale_y = screenshot.height / screen_height
+    if region:
+        scale_x = screenshot.width / region[2]
+        scale_y = screenshot.height / region[3]
+    else:
+        screen_width, screen_height = pyautogui.size()
+        scale_x = screenshot.width / screen_width
+        scale_y = screenshot.height / screen_height
     
     # Convert screenshot to OpenCV format (numpy array)
     img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
@@ -267,8 +314,8 @@ def find_text_and_interact(parent, target_text, text_to_type):
             pixel_y = y + (h / 2)
             
             # Convert image pixels to screen points for pyautogui
-            target_x = pixel_x / scale_x
-            target_y = pixel_y / scale_y
+            target_x = (pixel_x / scale_x) + region_offset_x
+            target_y = (pixel_y / scale_y) + region_offset_y
             
             # Use the precise width of the matched text
             target_w = w / scale_x
@@ -289,23 +336,23 @@ def find_text_and_interact(parent, target_text, text_to_type):
         
         # 4. Perform a type operation
         if not ui_countdown_with_interrupt(parent, TIMER, f"type '{text_to_type}'", target_x, target_y, target_w, target_h):
-            return False
+            return False, "User manually interrupted before typing"
             
         print(f"Performing type operation: '{text_to_type}'")
         pyautogui.write(text_to_type, interval=0.05)
         
         # 5. Perform an enter operation
         if not ui_countdown_with_interrupt(parent, TIMER, "press Enter", target_x, target_y, target_w, target_h):
-            return False
+            return False, "User manually interrupted before pressing Enter"
             
         print("Performing enter operation...")
         pyautogui.press('enter')
         
         print("Operation completed successfully!")
-        return True
+        return True, ""
     else:
         print(f"Could not find the text '{target_text}' on the screen.")
-        return False
+        return False, f"Could not find text '{target_text}' via OCR"
 
 class SimulatorApp(ctk.CTk):
     def __init__(self):
@@ -344,27 +391,27 @@ class SimulatorApp(ctk.CTk):
         
         # Input: Target Window Name
         ctk.CTkLabel(frame, text="Target Window Name:", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_window = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_window = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_window.insert(0, "Zoom")
-        self.entry_window.pack(pady=(0, 15), padx=20)
+        self.entry_window.pack(fill="x", pady=(0, 15), padx=20)
         
         # Input: Search Text
         ctk.CTkLabel(frame, text="Search Text:", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_search = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_search = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_search.insert(0, "Write a message to Webex space for Mohana")
-        self.entry_search.pack(pady=(0, 15), padx=20)
+        self.entry_search.pack(fill="x", pady=(0, 15), padx=20)
         
         # Input: Text to Type
         ctk.CTkLabel(frame, text="Text to Type:", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_type = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_type = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_type.insert(0, "Check")
-        self.entry_type.pack(pady=(0, 15), padx=20)
+        self.entry_type.pack(fill="x", pady=(0, 15), padx=20)
         
         # Input: Interval
         ctk.CTkLabel(frame, text="Run every X minutes (0 for single run):", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=20)
-        self.entry_interval = ctk.CTkEntry(frame, width=600, height=40, font=ctk.CTkFont(size=14))
+        self.entry_interval = ctk.CTkEntry(frame, height=40, font=ctk.CTkFont(size=14))
         self.entry_interval.insert(0, "15")
-        self.entry_interval.pack(pady=(0, 25), padx=20)
+        self.entry_interval.pack(fill="x", pady=(0, 25), padx=20)
         
         # Buttons Frame
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -381,8 +428,16 @@ class SimulatorApp(ctk.CTk):
         self.btn_stop.pack(side="left", padx=10)
         
         # Status Label
-        self.lbl_status = ctk.CTkLabel(frame, text="", text_color="#007bff", font=ctk.CTkFont(size=14, weight="bold"))
+        self.lbl_status = ctk.CTkLabel(frame, text="", text_color="#007bff", font=ctk.CTkFont(size=14, weight="bold"), wraplength=600)
         self.lbl_status.pack(pady=5)
+        
+        # Download Progress Bar
+        self.progress_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        self.lbl_download = ctk.CTkLabel(self.progress_frame, text="Downloading Tesseract OCR engine...", text_color="#ffcc00", font=ctk.CTkFont(size=12))
+        self.lbl_download.pack()
+        self.progressbar = ctk.CTkProgressBar(self.progress_frame, width=400)
+        self.progressbar.set(0)
+        self.progressbar.pack(pady=(5, 0))
         
         # Image Label
         self.lbl_image = ctk.CTkLabel(frame, text="")
@@ -393,6 +448,66 @@ class SimulatorApp(ctk.CTk):
         
         self.config_path = os.path.join(os.path.expanduser("~"), ".text_type_simulator_config.json")
         self.load_config()
+        
+        # Check if Tesseract needs downloading
+        needs_download = False
+        if sys.platform == "win32":
+            try:
+                # Try to get tesseract version. If it succeeds, it's installed and accessible!
+                pytesseract.get_tesseract_version()
+            except Exception:
+                needs_download = True
+                
+        if needs_download:
+            self.btn_run.configure(state="disabled")
+            self.progress_frame.pack(pady=10)
+            threading.Thread(target=self._download_tesseract, daemon=True).start()
+        else:
+            self.progress_frame.pack_forget()
+
+    def _download_tesseract(self):
+        try:
+            url = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
+            installer_path = os.path.join(os.path.expanduser("~"), ".text_type_simulator", "tesseract-setup.exe")
+            os.makedirs(os.path.dirname(installer_path), exist_ok=True)
+            
+            def report_hook(count, block_size, total_size):
+                if total_size > 0:
+                    progress = (count * block_size) / total_size
+                    self.after(0, lambda: self.progressbar.set(min(1.0, progress)))
+            
+            urllib.request.urlretrieve(url, installer_path, reporthook=report_hook)
+            
+            self.after(0, lambda: self.lbl_download.configure(text="Extracting Tesseract... (This may take a minute)", text_color="#17a2b8"))
+            self.after(0, lambda: self.progressbar.configure(mode="indeterminate"))
+            self.after(0, self.progressbar.start)
+            
+            # Run silent install with elevation (UAC prompt will appear)
+            self.after(0, lambda: self.lbl_download.configure(text="Please accept the Windows Admin prompt to install OCR..."))
+            ps_command = f"Start-Process -FilePath '{installer_path}' -ArgumentList '/S', '/D={TESSERACT_INSTALL_DIR}' -Verb RunAs -Wait"
+            subprocess.run(["powershell", "-Command", ps_command], check=True, creationflags=0x08000000)
+            
+            # Setup env
+            if os.path.exists(TESSERACT_EXE_PATH):
+                pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
+                os.environ["TESSDATA_PREFIX"] = os.path.join(TESSERACT_INSTALL_DIR, "tessdata")
+            else:
+                pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+            
+            # Clean up
+            if os.path.exists(installer_path):
+                os.remove(installer_path)
+                
+            self.after(0, self._on_download_complete)
+        except Exception as e:
+            self.after(0, lambda: self.lbl_download.configure(text=f"Failed to download OCR: {e}", text_color="#dc3545"))
+            self.after(0, self.progressbar.stop)
+
+    def _on_download_complete(self):
+        self.progressbar.stop()
+        self.progress_frame.pack_forget()
+        self.btn_run.configure(state="normal")
+        self.lbl_status.configure(text="Tesseract OCR successfully installed!", text_color="#28a745")
 
     def load_config(self):
         if os.path.exists(self.config_path):
@@ -447,12 +562,13 @@ class SimulatorApp(ctk.CTk):
             
         self.run_process()
 
-    def stop_process(self):
+    def stop_process(self, message="Autopilot stopped."):
         self.is_recurring = False
         if self.recurring_timer_id:
             self.after_cancel(self.recurring_timer_id)
             self.recurring_timer_id = None
-        self.lbl_status.configure(text="Autopilot stopped.")
+        if message:
+            self.lbl_status.configure(text=message)
         self.btn_stop.configure(state="disabled")
 
     def run_process(self):
@@ -468,32 +584,36 @@ class SimulatorApp(ctk.CTk):
         
     def _execute(self, window_name, search_text, type_text):
         success = False
+        reason = ""
         try:
-            if not activate_window(window_name):
-                self.lbl_status.configure(text=f"Error: Could not find window '{window_name}'")
+            window_found, region = activate_window(window_name)
+            if not window_found:
+                reason = f"Could not find window '{window_name}'"
+                self.lbl_status.configure(text=f"Error: {reason}")
             else:
-                success = find_text_and_interact(self, search_text, type_text)
+                success, reason = find_text_and_interact(self, search_text, type_text, region)
                 if success:
                     self.lbl_status.configure(text="Operation completed successfully!")
                 else:
-                    self.lbl_status.configure(text="Operation failed or was interrupted.")
+                    self.lbl_status.configure(text=f"Operation failed: {reason}")
                     
             # Load and display screenshot if it exists
             if os.path.exists('screenshot.png'):
                 img = Image.open('screenshot.png')
-                img.thumbnail((600, 450)) # Resize to fit the UI
+                img.thumbnail((500, 250)) # Resize to fit the UI without pushing window off-screen
                 ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
                 self.lbl_image.configure(image=ctk_img, text="")
                 
         except Exception as e:
-            self.lbl_status.configure(text=f"Error: {e}")
+            reason = str(e)
+            self.lbl_status.configure(text=f"Error: {reason}")
             
         self.deiconify() # Show main window again
         
         # Stop recurring if the user manually interrupted the process or it failed
         if not success and self.is_recurring:
-            self.lbl_status.configure(text=self.lbl_status.cget("text") + " | Autopilot stopped.")
-            self.stop_process()
+            new_msg = self.lbl_status.cget("text") + f" | Autopilot stopped ({reason})"
+            self.stop_process(message=new_msg)
             return
             
         if self.is_recurring:
